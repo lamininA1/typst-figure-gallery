@@ -2,7 +2,7 @@
   "name": "typst-figure-gallery",
   "displayName": "typst-figure-gallery",
   "description": "Show images from active Typst file",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "lamininA1",
   "license": "MIT",
   "repository": {

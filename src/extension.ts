@@ -11,6 +11,7 @@ interface FigureData {
 	sourceFileUri: vscode.Uri;
 	filePath: string; // 전체 경로 (전송용)
 	figureNumber: number;
+	label: string; // Label ID (예: <fig:experiment>)
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -122,11 +123,21 @@ function updateWebviewData(panel: vscode.WebviewPanel) {
 		const imagePathOnDisk = vscode.Uri.joinPath(sourceFolderPath, fig.imagePath);
 		const imageUrl = panel.webview.asWebviewUri(imagePathOnDisk).toString();
 
+		// 디버깅: 첫 번째 figure의 label 확인
+		if (index === 0) {
+			console.log(`[DEBUG updateWebviewData] fig.label: "${fig.label}"`);
+			console.log(`[DEBUG updateWebviewData] fig keys:`, Object.keys(fig));
+		}
+
 		return {
-			...fig,
+			imagePath: fig.imagePath,
+			caption: fig.caption,
+			line: fig.line,
+			sourceFile: fig.sourceFile,
+			filePath: fig.sourceFileUri.fsPath,
 			figureNumber: index + 1,
 			imageUrl: imageUrl,
-			filePath: fig.sourceFileUri.fsPath // Uri 객체는 JSON 변환 시 손실되므로 string으로 변환
+			label: fig.label || "" // 명시적으로 label 포함
 		};
 	});
 
@@ -285,6 +296,23 @@ function extractFigures(text: string, docUri: vscode.Uri): FigureData[] {
 		}
 		if (openCount !== 0) continue;
 
+		// Label 추출: figure() 블록 닫는 괄호 뒤를 확인
+		let labelText = "";
+		
+		// 닫는 괄호 뒤 200자 정도만 확인 (너무 길게 볼 필요 없음)
+		const afterClosing = text.substring(endIdx + 1, Math.min(text.length, endIdx + 200));
+		
+		// 수정 핵심: '#' 기호가 없어도 <라벨>을 찾도록 정규식 변경
+		// ^\s* : 시작 부분 공백/줄바꿈 허용
+		// #? : 혹시 모를 # 문자 처리 (선택적)
+		// <([^>]+)> : <라벨내용> 캡처
+		const labelRegex = /^\s*#?\s*<([^>]+)>/; 
+		
+		const labelMatch = labelRegex.exec(afterClosing);
+		if (labelMatch) {
+			labelText = `<${labelMatch[1]}>`;
+		}
+
 		const imageRegex = /image\s*\(\s*"([^"]+)"/;
 		const imgMatch = imageRegex.exec(contentInside);
 		if (!imgMatch) continue;
@@ -312,7 +340,8 @@ function extractFigures(text: string, docUri: vscode.Uri): FigureData[] {
 			sourceFile: fileName,
 			sourceFileUri: docUri,
 			filePath: docUri.fsPath,
-			figureNumber: 0
+			figureNumber: 0,
+			label: labelText
 		});
 	}
 	return figures;
@@ -337,7 +366,10 @@ function getWebviewBaseContent(webview: vscode.Webview): string {
         .image-container { height: 150px; background-color: var(--vscode-editor-inactiveSelectionBackground); display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .image-container img { max-width: 100%; max-height: 100%; object-fit: contain; }
         .caption { padding: 10px; font-size: 0.9em; }
-        .figure-number { display: block; font-size: 0.9em; font-weight: 600; color: var(--vscode-textLink-foreground); margin-bottom: 4px; }
+        .figure-number { display: inline-block; font-size: 0.9em; font-weight: 600; color: var(--vscode-textLink-foreground); margin-bottom: 4px; margin-right: 6px; }
+        .label-id { display: inline-block; font-size: 0.85em; font-weight: 500; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); margin-bottom: 4px; }
+        .label-in-caption { display: block; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border); }
+        .label-in-caption-label { font-weight: 600; margin-right: 4px; }
         .line-number { display: block; font-size: 0.75em; color: var(--vscode-descriptionForeground); margin-bottom: 4px; font-family: var(--vscode-editor-font-family); }
         .caption p { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
@@ -384,6 +416,10 @@ function getWebviewBaseContent(webview: vscode.Webview): string {
                 <div class="modal-caption">
                     <div class="modal-caption-label">Caption:</div>
                     <div class="modal-caption-text" id="modal-caption"></div>
+                    <div class="label-in-caption" id="modal-label" style="display: none;">
+                        <span class="label-in-caption-label">Label:</span>
+                        <span id="modal-label-value"></span>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -407,6 +443,14 @@ function getWebviewBaseContent(webview: vscode.Webview): string {
             const message = event.data;
             if (message.command === 'updateFigures') {
                 figuresData = message.data;
+                
+                // 디버깅: 받은 데이터 확인
+                if (figuresData.length > 0) {
+                    console.log('[DEBUG JS] First figure data:', JSON.stringify(figuresData[0], null, 2));
+                    console.log('[DEBUG JS] First figure label:', figuresData[0].label);
+                    console.log('[DEBUG JS] First figure has label?', 'label' in figuresData[0]);
+                }
+                
                 renderGallery();
                 
                 // 모달이 열려있으면 내용만 갱신 (모달을 끄지 않음!)
@@ -434,15 +478,38 @@ function getWebviewBaseContent(webview: vscode.Webview): string {
             }
 
             container.innerHTML = figuresData.map((fig, index) => {
-                const escapedCaption = (fig.caption || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                const figNumber = fig.figureNumber;
+                const figLabel = fig.label || '';
+                const figSourceFile = fig.sourceFile || '';
+                const figLine = fig.line || 0;
+                const figCaption = fig.caption || '';
+                const figImageUrl = fig.imageUrl || '';
+                
+                // [수정 핵심] <, > 문자를 HTML 엔티티(&lt;, &gt;)로 변환해야 화면에 보입니다.
+                const escapeHtml = (str) => {
+                    if (!str) return '';
+                    return str
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                };
+
+                const escapedCaption = escapeHtml(figCaption);
+                const escapedLabel = escapeHtml(figLabel); // 이제 <figure.plot>이 &lt;figure.plot&gt;이 되어 보입니다.
+                
+                // label HTML 생성
+                const labelHtml = escapedLabel ? ' <span class="label-id">' + escapedLabel + '</span>' : '';
+                
                 return \`
                     <div class="card" onclick="openModal(\${index})">
                         <div class="image-container">
-                            <img src="\${fig.imageUrl}" alt="\${escapedCaption}" />
+                            <img src="\${figImageUrl}" alt="\${escapedCaption}" />
                         </div>
                         <div class="caption">
-                            <span class="figure-number">Figure \${fig.figureNumber}</span>
-                            <span class="line-number">\${fig.sourceFile}:\${fig.line}</span>
+                            <span class="figure-number">Figure \${figNumber}\${labelHtml}</span>
+                            <span class="line-number">\${figSourceFile}:\${figLine}</span>
                             <p>\${escapedCaption}</p>
                         </div>
                     </div>
@@ -461,9 +528,23 @@ function getWebviewBaseContent(webview: vscode.Webview): string {
             if (!fig) return;
 
             document.getElementById('modal-image').src = fig.imageUrl;
-            document.getElementById('modal-title').textContent = 'Figure ' + fig.figureNumber;
+            // 모달 제목에 label 표시 (textContent 사용하므로 이스케이프 불필요)
+            const titleText = fig.label ? 'Figure ' + fig.figureNumber + ' ' + fig.label : 'Figure ' + fig.figureNumber;
+            document.getElementById('modal-title').textContent = titleText;
             document.getElementById('modal-caption').textContent = fig.caption || 'No Caption';
-            document.getElementById('modal-info').textContent = \`\${fig.sourceFile}:\${fig.line} | \${fig.imagePath}\`;
+            
+            // Caption 아래에 label 표시
+            const labelElement = document.getElementById('modal-label');
+            const labelValueElement = document.getElementById('modal-label-value');
+            if (fig.label) {
+                labelElement.style.display = 'block';
+                labelValueElement.textContent = fig.label; // textContent 사용하므로 이스케이프 불필요
+            } else {
+                labelElement.style.display = 'none';
+            }
+            
+            const infoText = fig.sourceFile + ':' + fig.line + ' | ' + fig.imagePath;
+            document.getElementById('modal-info').textContent = infoText;
             document.getElementById('modal-counter').textContent = \`\${index + 1} / \${figuresData.length}\`;
             updateNavButtons();
         }
