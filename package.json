@@ -3,11 +3,24 @@
   "displayName": "typst-figure-gallery",
   "description": "Show images from active Typst file",
   "version": "0.0.1",
+  "publisher": "lamininA1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lamininA1/typst-figure-gallery"
+  },
   "engines": {
     "vscode": "^1.90.0" 
   },
   "categories": [
-    "Other"
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "typst",
+    "figure",
+    "gallery",
+    "image"
   ],
   "activationEvents": [
     "onLanguage:typst"
